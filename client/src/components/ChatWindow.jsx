@@ -7,28 +7,47 @@ import { formatMessageDate } from '../utils/dateUtils';
 import * as attachmentsApi from '../api/attachmentsApi';
 
 const getParticipantId = (p) => {
+  if (!p) return null;
+
+  // Support Mongo-like {$oid:"..."} shapes
+  if (p.$oid) return p.$oid;
+  if (p?._id?.$oid) return p._id.$oid;
+
+  // Support nested ids (sometimes id/_id are objects)
+  if (p.id) return getParticipantId(p.id);
+  if (p._id) return getParticipantId(p._id);
+
   const raw = p?.id || p?._id || p;
   if (!raw) return null;
+
+  if (raw.$oid) return raw.$oid;
   if (typeof raw === 'string') return raw;
-  if (typeof raw?.toString === 'function') return raw.toString();
+
+  if (typeof raw?.toString === 'function') {
+    const str = raw.toString();
+    if (str && str !== '[object Object]') return str;
+  }
+
   return null;
 };
 
 const getMessageId = (m) => m?.id || m?._id || null;
 
-const AttachmentCard = ({ attachment, getAttachmentUrl, formatSize, isImage }) => {
+const isImageMime = (mimeType) => typeof mimeType === 'string' && mimeType.startsWith('image/');
+
+const AttachmentCard = ({ attachment, getAttachmentUrl, formatSize }) => {
   const [imageError, setImageError] = useState(false);
 
   const attId = (attachment?.id || attachment?._id || '').toString();
   if (!attId) return null;
 
   const downloadUrl = getAttachmentUrl(attId);
-  const isPreviewable = isImage(attachment?.mimeType) && !imageError;
+  const showPreview = isImageMime(attachment?.mimeType) && !imageError;
 
   return (
     <div className="attachment-card attachment-card--document">
       <div className="attachment-card__icon" aria-hidden>
-        {isPreviewable ? (
+        {showPreview ? (
           <img
             src={downloadUrl}
             alt={attachment.originalName || 'Вложение'}
@@ -48,10 +67,26 @@ const AttachmentCard = ({ attachment, getAttachmentUrl, formatSize, isImage }) =
       </div>
 
       <a className="link-btn" href={downloadUrl} target="_blank" rel="noreferrer">
-        Открыть
+        Открыть/Скачать
       </a>
     </div>
   );
+};
+
+AttachmentCard.propTypes = {
+  attachment: PropTypes.shape({
+    id: PropTypes.string,
+    _id: PropTypes.string,
+    originalName: PropTypes.string,
+    mimeType: PropTypes.string,
+    size: PropTypes.number,
+  }),
+  getAttachmentUrl: PropTypes.func.isRequired,
+  formatSize: PropTypes.func.isRequired,
+};
+
+AttachmentCard.defaultProps = {
+  attachment: null,
 };
 
 const ChatWindow = ({
@@ -83,7 +118,6 @@ const ChatWindow = ({
   const typingActive = useRef(false);
   const fileInputRef = useRef(null);
   const searchInputRef = useRef(null);
-  const mentionPopoverRef = useRef(null);
 
   const [showSettings, setShowSettings] = useState(false);
   const [unreadSeparatorMessageId, setUnreadSeparatorMessageId] = useState(null);
@@ -103,6 +137,8 @@ const ChatWindow = ({
   const [rateLimitedUntil, setRateLimitedUntil] = useState(null);
   const [rateLimitLimit, setRateLimitLimit] = useState(null);
   const [rateLimitTick, setRateLimitTick] = useState(0);
+
+  const mentionPopoverRef = useRef(null);
 
   // Safe aliases (не падать на медленной загрузке данных)
   const chatId = (chat?.id || chat?._id || '').toString();
@@ -129,26 +165,21 @@ const ChatWindow = ({
     setRateLimitedUntil(null);
     setRateLimitLimit(null);
 
-    if (typingTimer.current) {
-      clearTimeout(typingTimer.current);
-    }
-    if (typingActive.current && onTypingStop && chatId) {
-      onTypingStop(chatId);
-    }
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+
+    if (typingActive.current && onTypingStop && chatId) onTypingStop(chatId);
     typingActive.current = false;
   }, [chatId, onTypingStop]);
 
   const getSenderId = (message) =>
-    message?.senderId || message?.sender?.id || message?.sender?._id || message?.sender || null;
+    getParticipantId(
+      message?.senderId || message?.sender?.id || message?.sender?._id || message?.sender || null
+    );
 
   useEffect(
     () => () => {
-      if (typingTimer.current) {
-        clearTimeout(typingTimer.current);
-      }
-      if (typingActive.current && onTypingStop && chatId) {
-        onTypingStop(chatId);
-      }
+      if (typingTimer.current) clearTimeout(typingTimer.current);
+      if (typingActive.current && onTypingStop && chatId) onTypingStop(chatId);
       typingActive.current = false;
     },
     [chatId, onTypingStop]
@@ -187,9 +218,7 @@ const ChatWindow = ({
 
   // Auto-scroll
   useEffect(() => {
-    if (listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight;
-    }
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [safeMessages]);
 
   useEffect(() => {
@@ -197,30 +226,21 @@ const ChatWindow = ({
       if (mentionPopoverRef.current && !mentionPopoverRef.current.contains(event.target)) {
         setShowMentions(false);
       }
-
-      if (!event.target.closest('.message-actions__menu')) {
-        setActionMenuMessageId(null);
-      }
-
-      if (!event.target.closest('.message-reactions__menu')) {
-        setReactionMenuMessageId(null);
-      }
+      if (!event.target.closest('.message-actions__menu')) setActionMenuMessageId(null);
+      if (!event.target.closest('.message-reactions__menu')) setReactionMenuMessageId(null);
     };
 
     document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   useEffect(() => {
-    if (showSearch && searchInputRef.current) {
-      searchInputRef.current.focus();
-    }
+    if (showSearch && searchInputRef.current) searchInputRef.current.focus();
   }, [showSearch]);
 
   useEffect(() => {
     if (!showSearch) return undefined;
+
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
         setShowSearch(false);
@@ -229,16 +249,12 @@ const ChatWindow = ({
     };
 
     document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-    };
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, [showSearch]);
 
   useEffect(() => {
     if (!rateLimitedUntil) return undefined;
-    const timer = setInterval(() => {
-      setRateLimitTick((prev) => prev + 1);
-    }, 1000);
+    const timer = setInterval(() => setRateLimitTick((prev) => prev + 1), 1000);
     return () => clearInterval(timer);
   }, [rateLimitedUntil]);
 
@@ -330,18 +346,16 @@ const ChatWindow = ({
   // Moderation derived before bottomNotice (иначе TDZ)
   const isMuted = !!(chat?.muteUntil && new Date(chat.muteUntil).getTime() > Date.now());
   const muteUntilText = isMuted ? new Date(chat?.muteUntil).toLocaleString() : null;
+
   const rateLimitPerMinute = chat?.rateLimitPerMinute || null;
   const rateLimitUntilDate = rateLimitedUntil ? new Date(rateLimitedUntil) : null;
   const isRateLimited = rateLimitUntilDate && rateLimitUntilDate.getTime() > Date.now();
-
   const resolvedLimit = rateLimitLimit || rateLimitPerMinute || null;
 
   const formatMinutesLabel = (limit) => {
     if (!limit || typeof limit !== 'number') return 'в минуту';
     if (limit % 10 === 1 && limit % 100 !== 11) return `в ${limit} минуту`;
-    if ([2, 3, 4].includes(limit % 10) && ![12, 13, 14].includes(limit % 100)) {
-      return `в ${limit} минуты`;
-    }
+    if ([2, 3, 4].includes(limit % 10) && ![12, 13, 14].includes(limit % 100)) return `в ${limit} минуты`;
     return `в ${limit} минут`;
   };
 
@@ -352,7 +366,7 @@ const ChatWindow = ({
     isRateLimited && resolvedLimit
       ? `В этом чате установлен лимит: 1 сообщение ${formatMinutesLabel(
           resolvedLimit
-        )}. Следующая отправка возможна через ${secondsLeft} сек. (до ${rateLimitUntilDate.toLocaleString()}).`
+        )}. Следующая отправка возможна через ${secondsLeft} секунд (до ${rateLimitUntilDate.toLocaleString()}).`
       : '';
 
   const bottomNotice = useMemo(() => {
@@ -379,16 +393,7 @@ const ChatWindow = ({
     }
 
     return '';
-  }, [
-    chatBlocked,
-    isBlockedByMe,
-    isBlockedMe,
-    isRemovedFromGroup,
-    chatType,
-    isMuted,
-    muteUntilText,
-    canManageGroup,
-  ]);
+  }, [chatBlocked, isBlockedByMe, isBlockedMe, isRemovedFromGroup, chatType, isMuted, muteUntilText, canManageGroup]);
 
   const pinnedSet = useMemo(
     () => new Set((pinnedMessageIds || []).map((x) => x?.toString?.() || x)),
@@ -399,9 +404,7 @@ const ChatWindow = ({
     () =>
       (pinnedMessageIds || []).map((idRaw) => {
         const id = (idRaw?.toString?.() || idRaw || '').toString();
-        const found = safeMessages.find(
-          (message) => (getMessageId(message)?.toString?.() || '') === id
-        );
+        const found = safeMessages.find((message) => (getMessageId(message)?.toString?.() || '') === id);
         return { id, message: found };
       }),
     [safeMessages, pinnedMessageIds]
@@ -442,21 +445,15 @@ const ChatWindow = ({
       typingActive.current = true;
     }
 
-    if (typingTimer.current) {
-      clearTimeout(typingTimer.current);
-    }
+    if (typingTimer.current) clearTimeout(typingTimer.current);
 
     typingTimer.current = setTimeout(() => {
-      if (typingActive.current && chatId) {
-        onTypingStop && onTypingStop(chatId);
-      }
+      if (typingActive.current && chatId) onTypingStop && onTypingStop(chatId);
       typingActive.current = false;
     }, 1200);
 
     if (!hasText) {
-      if (typingActive.current && chatId) {
-        onTypingStop && onTypingStop(chatId);
-      }
+      if (typingActive.current && chatId) onTypingStop && onTypingStop(chatId);
       typingActive.current = false;
     }
   };
@@ -491,9 +488,7 @@ const ChatWindow = ({
           ? new Date(Date.now() + retryAfterMs)
           : null;
 
-        if (nextDate) {
-          setRateLimitedUntil(nextDate.toISOString());
-        }
+        if (nextDate) setRateLimitedUntil(nextDate.toISOString());
         setRateLimitLimit(limit);
         return;
       }
@@ -508,14 +503,10 @@ const ChatWindow = ({
     setSelectedMentions([]);
     setPendingAttachments([]);
 
-    if (typingActive.current && chatId) {
-      onTypingStop && onTypingStop(chatId);
-    }
+    if (typingActive.current && chatId) onTypingStop && onTypingStop(chatId);
     typingActive.current = false;
 
-    if (typingTimer.current) {
-      clearTimeout(typingTimer.current);
-    }
+    if (typingTimer.current) clearTimeout(typingTimer.current);
   };
 
   const handleDeleteForMe = async (messageId) => {
@@ -611,12 +602,8 @@ const ChatWindow = ({
 
   const removePendingAttachment = (idRaw) => {
     const id = (idRaw || '').toString();
-    setPendingAttachments((prev) =>
-      prev.filter((att) => (att?.id || att?._id || '').toString() !== id)
-    );
+    setPendingAttachments((prev) => prev.filter((att) => (att?.id || att?._id || '').toString() !== id));
   };
-
-  const isImage = (mimeType) => typeof mimeType === 'string' && mimeType.startsWith('image/');
 
   const getAttachmentUrl = (id) => attachmentsApi.getAttachmentUrl(id);
 
@@ -628,9 +615,7 @@ const ChatWindow = ({
   };
 
   const getDisplayName = (userId) => {
-    const participant = (participants || []).find(
-      (p) => getParticipantId(p) === (userId || '').toString()
-    );
+    const participant = (participants || []).find((p) => getParticipantId(p) === (userId || '').toString());
     return participant?.displayName || participant?.username || userId || 'пользователь';
   };
 
@@ -641,9 +626,7 @@ const ChatWindow = ({
       case 'MESSAGE_DELETED_FOR_ALL':
         return `${actor} удалил сообщение ${meta.messageId || ''}`;
       case 'MUTE_SET':
-        return `${actor} включил паузу до ${
-          meta.muteUntil ? new Date(meta.muteUntil).toLocaleString() : ''
-        }`;
+        return `${actor} включил паузу до ${meta.muteUntil ? new Date(meta.muteUntil).toLocaleString() : ''}`;
       case 'MUTE_CLEARED':
         return `${actor} снял паузу чата`;
       case 'RATE_LIMIT_SET':
@@ -671,26 +654,19 @@ const ChatWindow = ({
     setAuditVisible((prev) => !prev);
   };
 
-  const showInput =
-    !isRemovedFromGroup && !chatBlocked && !(chatType === 'group' && isMuted && !canManageGroup);
+  const showInput = !isRemovedFromGroup && !chatBlocked && !(chatType === 'group' && isMuted && !canManageGroup);
   const typingHintVisible = showInput && typingHint;
 
   const jumpToMessage = (messageIdRaw) => {
     const messageId = (messageIdRaw || '').toString();
     const el = document.getElementById(`msg-${messageId}`);
-    if (el && listRef.current) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
+    if (el && listRef.current) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   useEffect(() => {
     if (!showInput && typingActive.current) {
-      if (typingTimer.current) {
-        clearTimeout(typingTimer.current);
-      }
-      if (chatId) {
-        onTypingStop && onTypingStop(chatId);
-      }
+      if (typingTimer.current) clearTimeout(typingTimer.current);
+      if (chatId) onTypingStop && onTypingStop(chatId);
       typingActive.current = false;
     }
   }, [showInput, onTypingStop, chatId]);
@@ -730,9 +706,7 @@ const ChatWindow = ({
             <div className="chat-window__action-popover" ref={mentionPopoverRef}>
               <button
                 type="button"
-                className={`secondary-btn icon-btn icon-btn--circle ${
-                  showMentions ? 'secondary-btn--active' : ''
-                }`}
+                className={`secondary-btn icon-btn icon-btn--circle ${showMentions ? 'secondary-btn--active' : ''}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowMentions((prev) => !prev);
@@ -765,17 +739,11 @@ const ChatWindow = ({
 
                     <div className="mention-chips">
                       {selectedMentions.map((id) => {
-                        const p = (participants || []).find(
-                          (participant) => getParticipantId(participant) === id
-                        );
+                        const p = (participants || []).find((participant) => getParticipantId(participant) === id);
                         return (
                           <span key={id} className="mention-chip">
                             @{p?.displayName || p?.username || 'пользователь'}
-                            <button
-                              type="button"
-                              className="mention-chip__remove"
-                              onClick={() => removeMention(id)}
-                            >
+                            <button type="button" className="mention-chip__remove" onClick={() => removeMention(id)}>
                               ×
                             </button>
                           </span>
@@ -789,11 +757,7 @@ const ChatWindow = ({
           )}
 
           {chatType === 'direct' && (
-            <button
-              type="button"
-              className="secondary-btn"
-              onClick={() => setShowManageModal(true)}
-            >
+            <button type="button" className="secondary-btn" onClick={() => setShowManageModal(true)}>
               Управление
             </button>
           )}
@@ -810,11 +774,13 @@ const ChatWindow = ({
             </button>
           )}
 
-          <button
-            type="button"
-            className="secondary-btn"
-            onClick={() => setShowSettings((prev) => !prev)}
-          >
+          {chatType === 'group' && canManageGroup && (
+            <button type="button" className="secondary-btn" onClick={toggleAudit} disabled={auditLoading}>
+              {auditVisible ? 'Скрыть аудит' : auditLoading ? 'Загрузка…' : 'Аудит'}
+            </button>
+          )}
+
+          <button type="button" className="secondary-btn" onClick={() => setShowSettings((prev) => !prev)}>
             Настройки
           </button>
 
@@ -825,9 +791,7 @@ const ChatWindow = ({
                   type="checkbox"
                   checked={!!chat?.notificationsEnabled}
                   onChange={async () => {
-                    if (!chat?.notificationsEnabled) {
-                      await ensureNotificationPermission();
-                    }
+                    if (!chat?.notificationsEnabled) await ensureNotificationPermission();
                     onToggleNotifications && onToggleNotifications(chatId);
                   }}
                 />
@@ -837,6 +801,27 @@ const ChatWindow = ({
           )}
         </div>
       </div>
+
+      {auditVisible && (
+        <div className="chat-window__moderation">
+          <div className="chat-window__moderation-title">Журнал аудита</div>
+          <div className="audit-log">
+            {(auditLog || []).length ? (
+              (auditLog || []).map((item) => {
+                const id = (item.id || item._id || `${item.type}-${item.createdAt}`).toString();
+                return (
+                  <div key={id} className="audit-log__item">
+                    <div className="audit-log__message">{formatAuditEvent(item)}</div>
+                    <div className="audit-log__meta">{formatMessageDate(item.createdAt)}</div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="muted">Нет записей</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showSearch && (
         <div className="chat-window__search">
@@ -861,12 +846,7 @@ const ChatWindow = ({
                   : message.text || (message.attachments?.length ? 'Вложение' : 'Сообщение')
                 : 'Сообщение';
               return (
-                <button
-                  key={id}
-                  type="button"
-                  className="secondary-btn"
-                  onClick={() => jumpToMessage(id)}
-                >
+                <button key={id} type="button" className="secondary-btn" onClick={() => jumpToMessage(id)}>
                   {label}
                 </button>
               );
@@ -877,16 +857,16 @@ const ChatWindow = ({
 
       <div className="chat-window__messages" ref={listRef}>
         {filteredMessages.length === 0 && (
-          <p className="empty-state">
-            {searchTerm ? 'Нет совпадений' : 'Нет сообщений. Напишите первым.'}
-          </p>
+          <p className="empty-state">{searchTerm ? 'Нет совпадений' : 'Нет сообщений. Напишите первым.'}</p>
         )}
 
         {filteredMessages.map((message) => {
           const messageId = getMessageId(message);
           const messageIdStr = (messageId?.toString?.() || '').toString();
 
-          const isMine = (getSenderId(message)?.toString?.() || '') === currentId;
+          const senderId = getSenderId(message);
+          const isMine = senderId && currentId ? senderId === currentId : false;
+
           const sender = message.sender || {};
           const authorName = sender.displayName || sender.username || 'Участник';
 
@@ -911,17 +891,53 @@ const ChatWindow = ({
           const attachments = message.attachments || [];
           const isDeletedForAll = !!message.deletedForAll;
 
-          const createdAtMs = message.createdAt ? new Date(message.createdAt).getTime() : Date.now();
+          const createdAtMs = (() => {
+            const raw = message.createdAt;
+
+            const tryParse = (value) => {
+              const ts = new Date(value).getTime();
+              return Number.isNaN(ts) ? null : ts;
+            };
+
+            const firstPass = raw ? tryParse(raw) : null;
+            if (firstPass !== null) return firstPass;
+
+            if (typeof raw === 'string') {
+              const cleaned = raw.replace(',', ' ').trim();
+              const match = cleaned.match(
+                /^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/
+              );
+              if (match) {
+                const [, dd, mm, yyyy, hh = '00', min = '00', ss = '00'] = match;
+                const parsed = new Date(
+                  Number(yyyy),
+                  Number(mm) - 1,
+                  Number(dd),
+                  Number(hh),
+                  Number(min),
+                  Number(ss)
+                ).getTime();
+                if (!Number.isNaN(parsed)) return parsed;
+              }
+            }
+
+            // UI fallback only; server must enforce real window
+            return Date.now();
+          })();
+
           const deleteWindowMs = 10 * 60 * 1000;
-          const canDeleteForAll = isMine && !isDeletedForAll && Date.now() - createdAtMs <= deleteWindowMs;
+          const canDeleteForAll =
+            isMine && !isDeletedForAll && Date.now() - createdAtMs <= deleteWindowMs;
 
           return (
             <div key={messageIdStr || messageId} id={`msg-${messageIdStr || messageId}`}>
-              {unreadSeparatorMessageId && messageIdStr && messageIdStr === unreadSeparatorMessageId && (
-                <div className="unread-separator">
-                  <span>— Непрочитанные сообщения —</span>
-                </div>
-              )}
+              {unreadSeparatorMessageId &&
+                messageIdStr &&
+                messageIdStr === unreadSeparatorMessageId && (
+                  <div className="unread-separator">
+                    <span>— Непрочитанные сообщения —</span>
+                  </div>
+                )}
 
               <div
                 className={`message-row ${isMine ? 'message-row--mine' : 'message-row--incoming'} ${
@@ -936,7 +952,9 @@ const ChatWindow = ({
                   </div>
 
                   <div className={`message-text ${isDeletedForAll ? 'message-text--deleted' : ''}`}>
-                    {isDeletedForAll ? 'Сообщение удалено' : message.text || (attachments.length ? 'Вложение' : '')}
+                    {isDeletedForAll
+                      ? 'Сообщение удалено'
+                      : message.text || (attachments.length ? 'Вложение' : '')}
                   </div>
 
                   {!isDeletedForAll && attachments.length > 0 && (
@@ -949,7 +967,6 @@ const ChatWindow = ({
                             attachment={att}
                             getAttachmentUrl={getAttachmentUrl}
                             formatSize={formatSize}
-                            isImage={isImage}
                           />
                         );
                       })}
@@ -1038,13 +1055,9 @@ const ChatWindow = ({
                               <button
                                 type="button"
                                 className="link-btn"
-                                style={{ display: 'block', width: '100%', textAlign: 'left' }}
                                 onClick={() => {
-                                  if (pinnedSet.has(messageIdStr)) {
-                                    onUnpin && onUnpin(messageIdStr);
-                                  } else {
-                                    onPin && onPin(messageIdStr);
-                                  }
+                                  if (pinnedSet.has(messageIdStr)) onUnpin && onUnpin(messageIdStr);
+                                  else onPin && onPin(messageIdStr);
                                   setActionMenuMessageId(null);
                                 }}
                               >
@@ -1055,7 +1068,6 @@ const ChatWindow = ({
                             <button
                               type="button"
                               className="link-btn"
-                              style={{ display: 'block', width: '100%', textAlign: 'left' }}
                               onClick={() => {
                                 handleDeleteForMe(messageIdStr);
                                 setActionMenuMessageId(null);
@@ -1068,7 +1080,6 @@ const ChatWindow = ({
                               <button
                                 type="button"
                                 className="link-btn"
-                                style={{ display: 'block', width: '100%', textAlign: 'left' }}
                                 onClick={() => {
                                   handleDeleteForAll(message);
                                   setActionMenuMessageId(null);
@@ -1210,10 +1221,10 @@ ChatWindow.propTypes = {
       id: PropTypes.string,
       _id: PropTypes.string,
       chatId: PropTypes.string,
-      senderId: PropTypes.string,
+      senderId: PropTypes.any,
       sender: PropTypes.object,
       text: PropTypes.string,
-      createdAt: PropTypes.string,
+      createdAt: PropTypes.any,
       mentions: PropTypes.arrayOf(PropTypes.string),
       deletedForAll: PropTypes.bool,
       deletedAt: PropTypes.string,

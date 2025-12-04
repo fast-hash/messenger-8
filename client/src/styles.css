@@ -514,15 +514,6 @@ button:disabled {
   font-weight: 600;
 }
 
-.secondary-btn:hover {
-  background: #d1d5db;
-}
-
-.secondary-btn--active {
-  background: #0b6efd;
-  color: #fff;
-}
-
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -1231,7 +1222,7 @@ button:disabled {
 .message-popover .link-btn {
   width: 100%;
   text-align: left;
-  padding: 6px 6px;
+  padding: 6px 4px;
   border-radius: 6px;
 }
 
@@ -1305,7 +1296,7 @@ button:disabled {
   gap: 10px;
 }
 
-.chat-window__mentions-controls select {
+.chat-window__mentions select {
   padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid #d1d5db;
