@@ -147,26 +147,34 @@ const sendMessage = async ({ chatId, senderId, senderRole, text, mentions = [], 
     (chat.createdBy && chat.createdBy.toString() === senderId.toString());
   const isGlobalAdmin = senderRole === 'admin';
 
+  if (chat.rateLimitPerMinute && !isChatAdmin && !isGlobalAdmin) {
+    const windowMs = 60 * 1000;
+    const since = new Date(Date.now() - windowMs);
+    const recentMessages = await Message.find({
+      chat: chatId,
+      sender: senderId,
+      createdAt: { $gt: since },
+    })
+      .sort({ createdAt: 1 })
+      .limit(chat.rateLimitPerMinute);
+
+    if (recentMessages.length >= chat.rateLimitPerMinute) {
+      const retryAt = new Date(recentMessages[0].createdAt.getTime() + windowMs);
+      const error = new Error('Превышен лимит отправки');
+      error.status = 429;
+      error.code = 'RATE_LIMITED';
+      error.retryAt = retryAt;
+      error.retryAfterMs = Math.max(retryAt.getTime() - Date.now(), 0);
+      error.limit = chat.rateLimitPerMinute;
+      throw error;
+    }
+  }
+
   const now = new Date();
   if (chat.muteUntil && new Date(chat.muteUntil).getTime() > now.getTime() && !isChatAdmin && !isGlobalAdmin) {
     const error = new Error(`Чат на паузе до ${new Date(chat.muteUntil).toISOString()}`);
     error.status = 403;
     throw error;
-  }
-
-  if (chat.rateLimitPerMinute && !isChatAdmin && !isGlobalAdmin) {
-    const since = new Date(now.getTime() - 60 * 1000);
-    const recentCount = await Message.countDocuments({
-      chat: chatId,
-      sender: senderId,
-      createdAt: { $gt: since },
-    });
-
-    if (recentCount >= chat.rateLimitPerMinute) {
-      const error = new Error('Превышен лимит сообщений в этом чате');
-      error.status = 429;
-      throw error;
-    }
   }
 
   const uniqueMentions = Array.from(
