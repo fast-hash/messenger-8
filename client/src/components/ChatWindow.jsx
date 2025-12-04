@@ -18,6 +18,7 @@ const getMessageId = (m) => m?.id || m?._id || null;
 
 const AttachmentCard = ({ attachment, getAttachmentUrl, formatSize, isImage }) => {
   const [imageError, setImageError] = useState(false);
+
   const attId = (attachment?.id || attachment?._id || '').toString();
   if (!attId) return null;
 
@@ -40,10 +41,12 @@ const AttachmentCard = ({ attachment, getAttachmentUrl, formatSize, isImage }) =
           </span>
         )}
       </div>
+
       <div className="attachment-card__body">
         <div className="attachment-card__name">{attachment.originalName || 'Файл'}</div>
         <div className="attachment-card__size muted">{formatSize(attachment.size)}</div>
       </div>
+
       <a className="link-btn" href={downloadUrl} target="_blank" rel="noreferrer">
         Открыть
       </a>
@@ -79,6 +82,8 @@ const ChatWindow = ({
   const typingTimer = useRef(null);
   const typingActive = useRef(false);
   const fileInputRef = useRef(null);
+  const searchInputRef = useRef(null);
+  const mentionPopoverRef = useRef(null);
 
   const [showSettings, setShowSettings] = useState(false);
   const [unreadSeparatorMessageId, setUnreadSeparatorMessageId] = useState(null);
@@ -96,9 +101,8 @@ const ChatWindow = ({
   const [actionMenuMessageId, setActionMenuMessageId] = useState(null);
   const [reactionMenuMessageId, setReactionMenuMessageId] = useState(null);
   const [rateLimitedUntil, setRateLimitedUntil] = useState(null);
-  const [rateLimitReason, setRateLimitReason] = useState('');
-
-  const mentionPopoverRef = useRef(null);
+  const [rateLimitLimit, setRateLimitLimit] = useState(null);
+  const [rateLimitTick, setRateLimitTick] = useState(0);
 
   // Safe aliases (не падать на медленной загрузке данных)
   const chatId = (chat?.id || chat?._id || '').toString();
@@ -123,7 +127,7 @@ const ChatWindow = ({
     setActionMenuMessageId(null);
     setReactionMenuMessageId(null);
     setRateLimitedUntil(null);
-    setRateLimitReason('');
+    setRateLimitLimit(null);
 
     if (typingTimer.current) {
       clearTimeout(typingTimer.current);
@@ -171,7 +175,15 @@ const ChatWindow = ({
       const id = getMessageId(separatorMsg);
       if (id) setUnreadSeparatorMessageId(id.toString());
     }
-  }, [chatId, safeMessages, chat?.lastReadAt, lastReadAt, unreadSeparatorMessageId, separatorCleared, currentUserId]);
+  }, [
+    chatId,
+    safeMessages,
+    chat?.lastReadAt,
+    lastReadAt,
+    unreadSeparatorMessageId,
+    separatorCleared,
+    currentUserId,
+  ]);
 
   // Auto-scroll
   useEffect(() => {
@@ -200,6 +212,44 @@ const ChatWindow = ({
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
+
+  useEffect(() => {
+    if (showSearch && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [showSearch]);
+
+  useEffect(() => {
+    if (!showSearch) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setShowSearch(false);
+        setSearchTerm('');
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showSearch]);
+
+  useEffect(() => {
+    if (!rateLimitedUntil) return undefined;
+    const timer = setInterval(() => {
+      setRateLimitTick((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [rateLimitedUntil]);
+
+  useEffect(() => {
+    if (!rateLimitedUntil) return;
+    const until = new Date(rateLimitedUntil);
+    if (until.getTime() <= Date.now()) {
+      setRateLimitedUntil(null);
+      setRateLimitLimit(null);
+    }
+  }, [rateLimitedUntil, rateLimitTick]);
 
   // Local search (E2E-friendly)
   const filteredMessages = useMemo(() => {
@@ -244,11 +294,19 @@ const ChatWindow = ({
 
   const isBlockedByMe =
     chatType === 'direct' &&
-    (chat?.blocks || []).some((b) => (b.by?.toString?.() || b.by) === currentId && (b.target?.toString?.() || b.target) === otherUserId);
+    (chat?.blocks || []).some(
+      (b) =>
+        (b.by?.toString?.() || b.by) === currentId &&
+        (b.target?.toString?.() || b.target) === otherUserId
+    );
 
   const isBlockedMe =
     chatType === 'direct' &&
-    (chat?.blocks || []).some((b) => (b.by?.toString?.() || b.by) === otherUserId && (b.target?.toString?.() || b.target) === currentId);
+    (chat?.blocks || []).some(
+      (b) =>
+        (b.by?.toString?.() || b.by) === otherUserId &&
+        (b.target?.toString?.() || b.target) === currentId
+    );
 
   const chatBlocked = chatType === 'direct' && (isBlockedByMe || isBlockedMe);
 
@@ -275,17 +333,27 @@ const ChatWindow = ({
   const rateLimitPerMinute = chat?.rateLimitPerMinute || null;
   const rateLimitUntilDate = rateLimitedUntil ? new Date(rateLimitedUntil) : null;
   const isRateLimited = rateLimitUntilDate && rateLimitUntilDate.getTime() > Date.now();
-  const rateLimitLabel = rateLimitReason ||
-    (rateLimitPerMinute
-      ? rateLimitPerMinute === 1
-        ? 'в 1 минуту'
-        : rateLimitPerMinute === 2
-        ? 'в 2 минуты'
-        : `в ${rateLimitPerMinute} минут`
-      : 'по времени');
-  const rateLimitBanner = isRateLimited && rateLimitUntilDate
-    ? `Превышен лимит отправки (${rateLimitLabel}). Можно отправить после ${rateLimitUntilDate.toLocaleTimeString()}.`
-    : '';
+
+  const resolvedLimit = rateLimitLimit || rateLimitPerMinute || null;
+
+  const formatMinutesLabel = (limit) => {
+    if (!limit || typeof limit !== 'number') return 'в минуту';
+    if (limit % 10 === 1 && limit % 100 !== 11) return `в ${limit} минуту`;
+    if ([2, 3, 4].includes(limit % 10) && ![12, 13, 14].includes(limit % 100)) {
+      return `в ${limit} минуты`;
+    }
+    return `в ${limit} минут`;
+  };
+
+  const remainingMs = isRateLimited ? Math.max(rateLimitUntilDate.getTime() - Date.now(), 0) : 0;
+  const secondsLeft = Math.ceil(remainingMs / 1000);
+
+  const rateLimitBanner =
+    isRateLimited && resolvedLimit
+      ? `В этом чате установлен лимит: 1 сообщение ${formatMinutesLabel(
+          resolvedLimit
+        )}. Следующая отправка возможна через ${secondsLeft} сек. (до ${rateLimitUntilDate.toLocaleString()}).`
+      : '';
 
   const bottomNotice = useMemo(() => {
     if (isRemovedFromGroup) {
@@ -311,15 +379,29 @@ const ChatWindow = ({
     }
 
     return '';
-  }, [chatBlocked, isBlockedByMe, isBlockedMe, isRemovedFromGroup, chatType, isMuted, muteUntilText, canManageGroup]);
+  }, [
+    chatBlocked,
+    isBlockedByMe,
+    isBlockedMe,
+    isRemovedFromGroup,
+    chatType,
+    isMuted,
+    muteUntilText,
+    canManageGroup,
+  ]);
 
-  const pinnedSet = useMemo(() => new Set((pinnedMessageIds || []).map((x) => x?.toString?.() || x)), [pinnedMessageIds]);
+  const pinnedSet = useMemo(
+    () => new Set((pinnedMessageIds || []).map((x) => x?.toString?.() || x)),
+    [pinnedMessageIds]
+  );
 
   const pinnedMessages = useMemo(
     () =>
       (pinnedMessageIds || []).map((idRaw) => {
         const id = (idRaw?.toString?.() || idRaw || '').toString();
-        const found = safeMessages.find((message) => (getMessageId(message)?.toString?.() || '') === id);
+        const found = safeMessages.find(
+          (message) => (getMessageId(message)?.toString?.() || '') === id
+        );
         return { id, message: found };
       }),
     [safeMessages, pinnedMessageIds]
@@ -331,7 +413,7 @@ const ChatWindow = ({
     (chat?.admins || []).map((x) => x?.toString?.() || x).includes(currentId);
 
   const canReact = !isRemovedFromGroup && !chatBlocked;
-  const reactionOptions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '✅', '👎'];
+  const reactionOptions = ['👍', '👎', '❤️', '😂', '😮', '😢', '🎉', '🙏', '🔥', '✅'];
 
   const typingHint = useMemo(() => {
     if (isRemovedFromGroup || chatBlocked) return '';
@@ -383,6 +465,7 @@ const ChatWindow = ({
     const trimmed = messageText.trim();
     const hasAttachments = pendingAttachments.length > 0;
     if (!trimmed && !hasAttachments) return;
+
     const rateLimitDate = rateLimitedUntil ? new Date(rateLimitedUntil) : null;
     if (rateLimitDate && rateLimitDate.getTime() > Date.now()) return;
 
@@ -401,16 +484,17 @@ const ChatWindow = ({
         const retryAt = err?.response?.data?.retryAt;
         const retryAfterMs = err?.response?.data?.retryAfterMs;
         const limit = err?.response?.data?.limit || rateLimitPerMinute || 1;
+
         const nextDate = retryAt
           ? new Date(retryAt)
           : retryAfterMs
           ? new Date(Date.now() + retryAfterMs)
           : null;
+
         if (nextDate) {
           setRateLimitedUntil(nextDate.toISOString());
         }
-        const label = limit === 1 ? 'в 1 минуту' : limit === 2 ? 'в 2 минуты' : `в ${limit} минут`;
-        setRateLimitReason(label);
+        setRateLimitLimit(limit);
         return;
       }
 
@@ -532,6 +616,8 @@ const ChatWindow = ({
     );
   };
 
+  const isImage = (mimeType) => typeof mimeType === 'string' && mimeType.startsWith('image/');
+
   const getAttachmentUrl = (id) => attachmentsApi.getAttachmentUrl(id);
 
   const formatSize = (size) => {
@@ -541,10 +627,10 @@ const ChatWindow = ({
     return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
   };
 
-  const isImage = (mime) => mime && mime.startsWith('image/');
-
   const getDisplayName = (userId) => {
-    const participant = (participants || []).find((p) => getParticipantId(p) === (userId || '').toString());
+    const participant = (participants || []).find(
+      (p) => getParticipantId(p) === (userId || '').toString()
+    );
     return participant?.displayName || participant?.username || userId || 'пользователь';
   };
 
@@ -555,7 +641,9 @@ const ChatWindow = ({
       case 'MESSAGE_DELETED_FOR_ALL':
         return `${actor} удалил сообщение ${meta.messageId || ''}`;
       case 'MUTE_SET':
-        return `${actor} включил паузу до ${meta.muteUntil ? new Date(meta.muteUntil).toLocaleString() : ''}`;
+        return `${actor} включил паузу до ${
+          meta.muteUntil ? new Date(meta.muteUntil).toLocaleString() : ''
+        }`;
       case 'MUTE_CLEARED':
         return `${actor} снял паузу чата`;
       case 'RATE_LIMIT_SET':
@@ -583,7 +671,8 @@ const ChatWindow = ({
     setAuditVisible((prev) => !prev);
   };
 
-  const showInput = !isRemovedFromGroup && !chatBlocked && !(chatType === 'group' && isMuted && !canManageGroup);
+  const showInput =
+    !isRemovedFromGroup && !chatBlocked && !(chatType === 'group' && isMuted && !canManageGroup);
   const typingHintVisible = showInput && typingHint;
 
   const jumpToMessage = (messageIdRaw) => {
@@ -623,29 +712,9 @@ const ChatWindow = ({
         </div>
 
         <div className="chat-window__actions">
-          {(canManageGroup || chatType === 'direct') && (
-            <button
-              type="button"
-              className="secondary-btn"
-              onClick={() => {
-                if (chatType === 'group') {
-                  onOpenManage && onOpenManage(chatId);
-                } else {
-                  setShowManageModal(true);
-                }
-              }}
-            >
-              Управление
-            </button>
-          )}
-
-          <button type="button" className="secondary-btn" onClick={() => setShowSettings((prev) => !prev)}>
-            Настройки
-          </button>
-
           <button
             type="button"
-            className="secondary-btn icon-btn"
+            className="secondary-btn icon-btn icon-btn--circle"
             onClick={() => {
               setShowSearch((prev) => {
                 if (prev) setSearchTerm('');
@@ -661,7 +730,9 @@ const ChatWindow = ({
             <div className="chat-window__action-popover" ref={mentionPopoverRef}>
               <button
                 type="button"
-                className={`secondary-btn icon-btn ${showMentions ? 'secondary-btn--active' : ''}`}
+                className={`secondary-btn icon-btn icon-btn--circle ${
+                  showMentions ? 'secondary-btn--active' : ''
+                }`}
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowMentions((prev) => !prev);
@@ -672,7 +743,7 @@ const ChatWindow = ({
               </button>
 
               {showMentions && (
-                <div className="chat-window__popover chat-window__popover--wide">
+                <div className="chat-window__popover chat-window__popover--mentions">
                   <div className="chat-window__mentions-controls">
                     <select
                       onChange={(e) => {
@@ -694,11 +765,17 @@ const ChatWindow = ({
 
                     <div className="mention-chips">
                       {selectedMentions.map((id) => {
-                        const p = (participants || []).find((participant) => getParticipantId(participant) === id);
+                        const p = (participants || []).find(
+                          (participant) => getParticipantId(participant) === id
+                        );
                         return (
                           <span key={id} className="mention-chip">
                             @{p?.displayName || p?.username || 'пользователь'}
-                            <button type="button" className="mention-chip__remove" onClick={() => removeMention(id)}>
+                            <button
+                              type="button"
+                              className="mention-chip__remove"
+                              onClick={() => removeMention(id)}
+                            >
                               ×
                             </button>
                           </span>
@@ -710,6 +787,36 @@ const ChatWindow = ({
               )}
             </div>
           )}
+
+          {chatType === 'direct' && (
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => setShowManageModal(true)}
+            >
+              Управление
+            </button>
+          )}
+
+          {chatType === 'group' && canManageGroup && (
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => {
+                onOpenManage && onOpenManage(chatId);
+              }}
+            >
+              Управление
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="secondary-btn"
+            onClick={() => setShowSettings((prev) => !prev)}
+          >
+            Настройки
+          </button>
 
           {showSettings && (
             <div className="chat-window__settings">
@@ -738,6 +845,7 @@ const ChatWindow = ({
             placeholder="Поиск по сообщениям"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            ref={searchInputRef}
           />
         </div>
       )}
@@ -753,7 +861,12 @@ const ChatWindow = ({
                   : message.text || (message.attachments?.length ? 'Вложение' : 'Сообщение')
                 : 'Сообщение';
               return (
-                <button key={id} type="button" className="secondary-btn" onClick={() => jumpToMessage(id)}>
+                <button
+                  key={id}
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => jumpToMessage(id)}
+                >
                   {label}
                 </button>
               );
@@ -764,7 +877,9 @@ const ChatWindow = ({
 
       <div className="chat-window__messages" ref={listRef}>
         {filteredMessages.length === 0 && (
-          <p className="empty-state">{searchTerm ? 'Нет совпадений' : 'Нет сообщений. Напишите первым.'}</p>
+          <p className="empty-state">
+            {searchTerm ? 'Нет совпадений' : 'Нет сообщений. Напишите первым.'}
+          </p>
         )}
 
         {filteredMessages.map((message) => {
@@ -857,6 +972,10 @@ const ChatWindow = ({
                       </div>
                     </div>
                   )}
+                </div>
+
+                <div className="message-meta-column">
+                  <div className="message-time">{formatMessageDate(message.createdAt)}</div>
 
                   {!isDeletedForAll && (
                     <div className="message-actions message-actions--compact">
@@ -919,6 +1038,7 @@ const ChatWindow = ({
                               <button
                                 type="button"
                                 className="link-btn"
+                                style={{ display: 'block', width: '100%', textAlign: 'left' }}
                                 onClick={() => {
                                   if (pinnedSet.has(messageIdStr)) {
                                     onUnpin && onUnpin(messageIdStr);
@@ -935,6 +1055,7 @@ const ChatWindow = ({
                             <button
                               type="button"
                               className="link-btn"
+                              style={{ display: 'block', width: '100%', textAlign: 'left' }}
                               onClick={() => {
                                 handleDeleteForMe(messageIdStr);
                                 setActionMenuMessageId(null);
@@ -942,10 +1063,12 @@ const ChatWindow = ({
                             >
                               Удалить у меня
                             </button>
+
                             {canDeleteForAll && (
                               <button
                                 type="button"
                                 className="link-btn"
+                                style={{ display: 'block', width: '100%', textAlign: 'left' }}
                                 onClick={() => {
                                   handleDeleteForAll(message);
                                   setActionMenuMessageId(null);
@@ -960,8 +1083,6 @@ const ChatWindow = ({
                     </div>
                   )}
                 </div>
-
-                <div className="message-time">{formatMessageDate(message.createdAt)}</div>
               </div>
             </div>
           );
@@ -1018,11 +1139,7 @@ const ChatWindow = ({
       </div>
 
       {showManageModal && chatType === 'direct' && (
-        <div
-          className="modal-backdrop"
-          onClick={() => setShowManageModal(false)}
-          role="presentation"
-        >
+        <div className="modal-backdrop" onClick={() => setShowManageModal(false)} role="presentation">
           <div className="modal" onClick={(e) => e.stopPropagation()} role="presentation">
             <div className="modal__header">
               <h3>Управление чатом</h3>
