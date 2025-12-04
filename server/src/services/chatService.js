@@ -36,6 +36,8 @@ const mapUser = (user) => ({
   role: user.role,
   department: user.department,
   jobTitle: user.jobTitle,
+  dndEnabled: user.dndEnabled || false,
+  dndUntil: user.dndUntil || null,
 });
 
 const ensureChatParticipant = (chat, userId) => {

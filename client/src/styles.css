@@ -187,6 +187,10 @@ button {
   background: #22c55e;
 }
 
+.status--dnd {
+  background: #ef4444;
+}
+
 .status--offline {
   background: #9ca3af;
 }
@@ -355,6 +359,12 @@ button {
   text-align: center;
 }
 
+.chat-input-banner--warning {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecdd3;
+}
+
 .chat-input-actions {
   padding: 8px 16px;
   border-top: 1px solid #e5e7eb;
@@ -488,6 +498,15 @@ button {
   border-radius: 10px;
   padding: 8px 12px;
   font-weight: 600;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  width: 36px;
+  min-width: 36px;
 }
 
 .auth-layout {
@@ -1007,12 +1026,35 @@ button {
   max-width: 220px;
 }
 
+.attachment-card--document {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+}
+
+.attachment-card__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: #eef2ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
 .attachment-card__image {
-  max-width: 200px;
-  max-height: 200px;
+  max-width: 100%;
+  max-height: 180px;
   border-radius: 6px;
   object-fit: cover;
   display: block;
+}
+
+.attachment-card__body {
+  flex: 1;
+  min-width: 0;
 }
 
 .attachment-card__file {
@@ -1045,6 +1087,13 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.chat-upload__status {
+  display: block;
+  margin: 6px 0;
+  font-size: 12px;
+  color: #6b7280;
 }
 
 .attachments-queue__item {
@@ -1112,6 +1161,38 @@ button {
   cursor: pointer;
 }
 
+.message-actions--compact {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  align-items: center;
+}
+
+.message-actions__menu {
+  position: relative;
+}
+
+.message-popover,
+.message-reactions__menu-list {
+  position: absolute;
+  top: 110%;
+  right: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+  padding: 8px;
+  min-width: 200px;
+  z-index: 4;
+}
+
+.message-reactions__menu-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 160px;
+}
+
 .chat-window__search {
   padding: 8px 12px;
   border-bottom: 1px solid #e5e7eb;
@@ -1141,6 +1222,27 @@ button {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.chat-window__action-popover {
+  position: relative;
+}
+
+.chat-window__popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  padding: 10px;
+  z-index: 5;
+  min-width: 220px;
+}
+
+.chat-window__popover--wide {
+  min-width: 260px;
 }
 
 .chat-window__mentions select {

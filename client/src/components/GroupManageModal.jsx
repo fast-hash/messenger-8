@@ -4,12 +4,13 @@ import UserPicker from './UserPicker';
 import { formatRole } from '../utils/roleLabels';
 import { getGroupDetails, addParticipant, removeParticipant, renameGroup, approveJoin, rejectJoin } from '../api/chatApi';
 
-const GroupManageModal = ({ isOpen, chatId, onClose, users, onUpdated, openConfirm }) => {
+const GroupManageModal = ({ isOpen, chatId, onClose, users, onUpdated, openConfirm, onUpdateModeration }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [title, setTitle] = useState('');
   const [selectedToAdd, setSelectedToAdd] = useState([]);
+  const [canManage, setCanManage] = useState(false);
 
   const load = async () => {
     if (!chatId) return;
@@ -19,6 +20,7 @@ const GroupManageModal = ({ isOpen, chatId, onClose, users, onUpdated, openConfi
       const res = await getGroupDetails(chatId);
       setData(res.chat);
       setTitle(res.chat.title || '');
+      setCanManage(!!res.canManage);
       onUpdated(res.chat);
     } catch (err) {
       setError('Не удалось загрузить данные группы');
@@ -59,6 +61,28 @@ const GroupManageModal = ({ isOpen, chatId, onClose, users, onUpdated, openConfi
     }
   };
 
+  const handleModerationUpdate = (payload) => {
+    if (!chatId) return;
+    setError('');
+    openConfirm('Сохранить настройки модерации?', async () => {
+      try {
+        await onUpdateModeration(chatId, payload);
+        await load();
+      } catch (err) {
+        setError('Не удалось обновить модерацию');
+      }
+    });
+  };
+
+  const handleMutePreset = async (minutes) => {
+    const until = minutes ? new Date(Date.now() + minutes * 60 * 1000).toISOString() : null;
+    await handleModerationUpdate({ muteUntil: until });
+  };
+
+  const handleRateLimitPreset = async (limit) => {
+    await handleModerationUpdate({ rateLimitPerMinute: limit });
+  };
+
   const handleRemove = async (participant) => {
     openConfirm(
       `Удалить участника ${participant.displayName || participant.username} из группы?`,
@@ -89,6 +113,9 @@ const GroupManageModal = ({ isOpen, chatId, onClose, users, onUpdated, openConfi
     }
   };
 
+  const muteUntilText = data?.muteUntil ? new Date(data.muteUntil).toLocaleString() : null;
+  const rateLimitPerMinute = data?.rateLimitPerMinute || null;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal large" onClick={(e) => e.stopPropagation()}>
@@ -114,6 +141,43 @@ const GroupManageModal = ({ isOpen, chatId, onClose, users, onUpdated, openConfi
             <button type="button" className="primary-btn" onClick={() => openConfirm(`Переименовать группу в "${title}"?`, handleRename)}>
               Сохранить название
             </button>
+
+            {canManage && (
+              <div className="chat-window__moderation">
+                <div className="chat-window__moderation-title">Модерация</div>
+                <div className="chat-window__moderation-row">
+                  <span>Mute:</span>
+                  <button type="button" className="secondary-btn" onClick={() => handleMutePreset(15)}>
+                    15 мин
+                  </button>
+                  <button type="button" className="secondary-btn" onClick={() => handleMutePreset(60)}>
+                    1 час
+                  </button>
+                  <button type="button" className="secondary-btn" onClick={() => handleMutePreset(null)}>
+                    Снять
+                  </button>
+                  {muteUntilText && <span className="muted">до {muteUntilText}</span>}
+                </div>
+
+                <div className="chat-window__moderation-row">
+                  <span>Лимит:</span>
+                  {[1, 2, 5].map((limit) => (
+                    <button
+                      key={`limit-${limit}`}
+                      type="button"
+                      className={`secondary-btn ${rateLimitPerMinute === limit ? 'secondary-btn--active' : ''}`}
+                      onClick={() => handleRateLimitPreset(limit)}
+                    >
+                      {limit}/мин
+                    </button>
+                  ))}
+                  <button type="button" className="secondary-btn" onClick={() => handleRateLimitPreset(null)}>
+                    Без лимита
+                  </button>
+                  {rateLimitPerMinute && <span className="muted">текущий: {rateLimitPerMinute}/мин</span>}
+                </div>
+              </div>
+            )}
 
             <h4>Участники</h4>
             <div className="list-scroll">
@@ -187,11 +251,13 @@ GroupManageModal.propTypes = {
   users: PropTypes.arrayOf(PropTypes.object).isRequired,
   onUpdated: PropTypes.func,
   openConfirm: PropTypes.func.isRequired,
+  onUpdateModeration: PropTypes.func,
 };
 
 GroupManageModal.defaultProps = {
   chatId: null,
   onUpdated: () => {},
+  onUpdateModeration: () => {},
 };
 
 export default GroupManageModal;

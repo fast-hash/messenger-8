@@ -297,7 +297,7 @@ const ChatsPage = () => {
                   await updatePreferences({ dndEnabled: !dndEnabled, dndUntil: null });
                 }}
               />
-              DND
+              Не беспокоить
             </label>
             <button
               type="button"
@@ -451,6 +451,7 @@ const ChatsPage = () => {
         users={users}
         onUpdated={handleManageUpdated}
         openConfirm={openConfirm}
+        onUpdateModeration={(chatId, payload) => updateModeration(chatId, payload)}
       />
 
       <ChatManagementModal

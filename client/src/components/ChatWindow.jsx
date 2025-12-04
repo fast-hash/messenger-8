@@ -16,6 +16,41 @@ const getParticipantId = (p) => {
 
 const getMessageId = (m) => m?.id || m?._id || null;
 
+const AttachmentCard = ({ attachment, getAttachmentUrl, formatSize, isImage }) => {
+  const [imageError, setImageError] = useState(false);
+  const attId = (attachment?.id || attachment?._id || '').toString();
+  if (!attId) return null;
+
+  const downloadUrl = getAttachmentUrl(attId);
+  const isPreviewable = isImage(attachment?.mimeType) && !imageError;
+
+  return (
+    <div className="attachment-card attachment-card--document">
+      <div className="attachment-card__icon" aria-hidden>
+        {isPreviewable ? (
+          <img
+            src={downloadUrl}
+            alt={attachment.originalName || 'Вложение'}
+            className="attachment-card__image"
+            onError={() => setImageError(true)}
+          />
+        ) : (
+          <span role="img" aria-label="Документ">
+            📄
+          </span>
+        )}
+      </div>
+      <div className="attachment-card__body">
+        <div className="attachment-card__name">{attachment.originalName || 'Файл'}</div>
+        <div className="attachment-card__size muted">{formatSize(attachment.size)}</div>
+      </div>
+      <a className="link-btn" href={downloadUrl} target="_blank" rel="noreferrer">
+        Открыть
+      </a>
+    </div>
+  );
+};
+
 const ChatWindow = ({
   chat,
   messages,
@@ -51,11 +86,19 @@ const ChatWindow = ({
   const [separatorCleared, setSeparatorCleared] = useState(false);
   const [messageText, setMessageText] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const [showMentions, setShowMentions] = useState(false);
   const [selectedMentions, setSelectedMentions] = useState([]);
   const [auditVisible, setAuditVisible] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  const [actionMenuMessageId, setActionMenuMessageId] = useState(null);
+  const [reactionMenuMessageId, setReactionMenuMessageId] = useState(null);
+  const [rateLimitedUntil, setRateLimitedUntil] = useState(null);
+  const [rateLimitReason, setRateLimitReason] = useState('');
+
+  const mentionPopoverRef = useRef(null);
 
   // Safe aliases (не падать на медленной загрузке данных)
   const chatId = (chat?.id || chat?._id || '').toString();
@@ -70,11 +113,17 @@ const ChatWindow = ({
     setSeparatorCleared(false);
     setMessageText('');
     setSearchTerm('');
+    setShowSearch(false);
+    setShowMentions(false);
     setSelectedMentions([]);
     setAuditVisible(false);
     setPendingAttachments([]);
     setUploadingAttachments(false);
     setShowSettings(false);
+    setActionMenuMessageId(null);
+    setReactionMenuMessageId(null);
+    setRateLimitedUntil(null);
+    setRateLimitReason('');
 
     if (typingTimer.current) {
       clearTimeout(typingTimer.current);
@@ -130,6 +179,27 @@ const ChatWindow = ({
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [safeMessages]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (mentionPopoverRef.current && !mentionPopoverRef.current.contains(event.target)) {
+        setShowMentions(false);
+      }
+
+      if (!event.target.closest('.message-actions__menu')) {
+        setActionMenuMessageId(null);
+      }
+
+      if (!event.target.closest('.message-reactions__menu')) {
+        setReactionMenuMessageId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Local search (E2E-friendly)
   const filteredMessages = useMemo(() => {
@@ -197,12 +267,25 @@ const ChatWindow = ({
       ? `Участников: ${participants.length}`
       : `${formatRole(otherUser?.role)} · ${otherUser?.department || 'Отдел не указан'} · ${
           chat?.isOnline ? 'онлайн' : 'офлайн'
-        }`;
+        }${otherUser?.dndEnabled ? ' · не беспокоить' : ''}`;
 
   // Moderation derived before bottomNotice (иначе TDZ)
   const isMuted = !!(chat?.muteUntil && new Date(chat.muteUntil).getTime() > Date.now());
   const muteUntilText = isMuted ? new Date(chat?.muteUntil).toLocaleString() : null;
   const rateLimitPerMinute = chat?.rateLimitPerMinute || null;
+  const rateLimitUntilDate = rateLimitedUntil ? new Date(rateLimitedUntil) : null;
+  const isRateLimited = rateLimitUntilDate && rateLimitUntilDate.getTime() > Date.now();
+  const rateLimitLabel = rateLimitReason ||
+    (rateLimitPerMinute
+      ? rateLimitPerMinute === 1
+        ? 'в 1 минуту'
+        : rateLimitPerMinute === 2
+        ? 'в 2 минуты'
+        : `в ${rateLimitPerMinute} минут`
+      : 'по времени');
+  const rateLimitBanner = isRateLimited && rateLimitUntilDate
+    ? `Превышен лимит отправки (${rateLimitLabel}). Можно отправить после ${rateLimitUntilDate.toLocaleTimeString()}.`
+    : '';
 
   const bottomNotice = useMemo(() => {
     if (isRemovedFromGroup) {
@@ -248,7 +331,7 @@ const ChatWindow = ({
     (chat?.admins || []).map((x) => x?.toString?.() || x).includes(currentId);
 
   const canReact = !isRemovedFromGroup && !chatBlocked;
-  const reactionOptions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '✅'];
+  const reactionOptions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '✅', '👎'];
 
   const typingHint = useMemo(() => {
     if (isRemovedFromGroup || chatBlocked) return '';
@@ -300,6 +383,8 @@ const ChatWindow = ({
     const trimmed = messageText.trim();
     const hasAttachments = pendingAttachments.length > 0;
     if (!trimmed && !hasAttachments) return;
+    const rateLimitDate = rateLimitedUntil ? new Date(rateLimitedUntil) : null;
+    if (rateLimitDate && rateLimitDate.getTime() > Date.now()) return;
 
     setUnreadSeparatorMessageId(null);
     setSeparatorCleared(true);
@@ -311,6 +396,24 @@ const ChatWindow = ({
 
       await onSend(trimmed, selectedMentions, attachmentIds);
     } catch (err) {
+      const rateLimited = err?.response?.data?.code === 'RATE_LIMITED';
+      if (rateLimited) {
+        const retryAt = err?.response?.data?.retryAt;
+        const retryAfterMs = err?.response?.data?.retryAfterMs;
+        const limit = err?.response?.data?.limit || rateLimitPerMinute || 1;
+        const nextDate = retryAt
+          ? new Date(retryAt)
+          : retryAfterMs
+          ? new Date(Date.now() + retryAfterMs)
+          : null;
+        if (nextDate) {
+          setRateLimitedUntil(nextDate.toISOString());
+        }
+        const label = limit === 1 ? 'в 1 минуту' : limit === 2 ? 'в 2 минуты' : `в ${limit} минут`;
+        setRateLimitReason(label);
+        return;
+      }
+
       const text = err?.response?.data?.message || err?.message || 'Не удалось отправить сообщение';
       // eslint-disable-next-line no-alert
       alert(text);
@@ -347,6 +450,13 @@ const ChatWindow = ({
       // eslint-disable-next-line no-alert
       alert(text);
     }
+  };
+
+  const handleReactionSelect = (message, emoji) => {
+    const id = (getMessageId(message)?.toString?.() || '').toString();
+    if (!id) return;
+    setReactionMenuMessageId(null);
+    onToggleReaction && onToggleReaction(id, emoji);
   };
 
   const addMention = (userIdRaw) => {
@@ -533,6 +643,74 @@ const ChatWindow = ({
             Настройки
           </button>
 
+          <button
+            type="button"
+            className="secondary-btn icon-btn"
+            onClick={() => {
+              setShowSearch((prev) => {
+                if (prev) setSearchTerm('');
+                return !prev;
+              });
+            }}
+            title="Поиск"
+          >
+            🔍
+          </button>
+
+          {mentionableParticipants.length > 0 && (
+            <div className="chat-window__action-popover" ref={mentionPopoverRef}>
+              <button
+                type="button"
+                className={`secondary-btn icon-btn ${showMentions ? 'secondary-btn--active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMentions((prev) => !prev);
+                }}
+                title="Добавить упоминание"
+              >
+                @
+              </button>
+
+              {showMentions && (
+                <div className="chat-window__popover chat-window__popover--wide">
+                  <div className="chat-window__mentions-controls">
+                    <select
+                      onChange={(e) => {
+                        addMention(e.target.value);
+                        e.target.value = '';
+                      }}
+                      defaultValue=""
+                    >
+                      <option value="">@ Упомянуть</option>
+                      {mentionableParticipants.map((p) => {
+                        const pid = getParticipantId(p);
+                        return (
+                          <option key={pid} value={pid}>
+                            {p.displayName || p.username || 'Участник'}
+                          </option>
+                        );
+                      })}
+                    </select>
+
+                    <div className="mention-chips">
+                      {selectedMentions.map((id) => {
+                        const p = (participants || []).find((participant) => getParticipantId(participant) === id);
+                        return (
+                          <span key={id} className="mention-chip">
+                            @{p?.displayName || p?.username || 'пользователь'}
+                            <button type="button" className="mention-chip__remove" onClick={() => removeMention(id)}>
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {showSettings && (
             <div className="chat-window__settings">
               <label className="field inline">
@@ -553,108 +731,14 @@ const ChatWindow = ({
         </div>
       </div>
 
-      <div className="chat-window__search">
-        <input
-          type="text"
-          placeholder="Поиск по сообщениям"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-      </div>
-
-      {mentionableParticipants.length > 0 && (
-        <div className="chat-window__mentions">
-          <div className="chat-window__mentions-title">Упоминания</div>
-          <div className="chat-window__mentions-controls">
-            <select
-              onChange={(e) => {
-                addMention(e.target.value);
-                e.target.value = '';
-              }}
-              defaultValue=""
-            >
-              <option value="">@ Упомянуть</option>
-              {mentionableParticipants.map((p) => {
-                const pid = getParticipantId(p);
-                return (
-                  <option key={pid} value={pid}>
-                    {p.displayName || p.username || 'Участник'}
-                  </option>
-                );
-              })}
-            </select>
-
-            <div className="mention-chips">
-              {selectedMentions.map((id) => {
-                const p = (participants || []).find((participant) => getParticipantId(participant) === id);
-                return (
-                  <span key={id} className="mention-chip">
-                    @{p?.displayName || p?.username || 'пользователь'}
-                    <button type="button" className="mention-chip__remove" onClick={() => removeMention(id)}>
-                      ×
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {canManageGroup && chatType === 'group' && (
-        <div className="chat-window__moderation">
-          <div className="chat-window__moderation-title">Модерация</div>
-
-          <div className="chat-window__moderation-row">
-            <span>Mute:</span>
-            <button type="button" className="secondary-btn" onClick={() => handleMutePreset(15)}>
-              15 мин
-            </button>
-            <button type="button" className="secondary-btn" onClick={() => handleMutePreset(60)}>
-              1 час
-            </button>
-            <button type="button" className="secondary-btn" onClick={() => handleMutePreset(null)}>
-              Снять
-            </button>
-            {muteUntilText && <span className="muted">до {muteUntilText}</span>}
-          </div>
-
-          <div className="chat-window__moderation-row">
-            <span>Лимит:</span>
-            {[1, 2, 5].map((limit) => (
-              <button
-                key={`limit-${limit}`}
-                type="button"
-                className={`secondary-btn ${rateLimitPerMinute === limit ? 'secondary-btn--active' : ''}`}
-                onClick={() => handleRateLimitPreset(limit)}
-              >
-                {limit}/мин
-              </button>
-            ))}
-            <button type="button" className="secondary-btn" onClick={() => handleRateLimitPreset(null)}>
-              Без лимита
-            </button>
-            {rateLimitPerMinute && <span className="muted">текущий: {rateLimitPerMinute}/мин</span>}
-          </div>
-
-          <div className="chat-window__moderation-row">
-            <button type="button" className="secondary-btn" onClick={toggleAudit}>
-              Журнал
-            </button>
-            {auditLoading && <span className="muted">Загрузка...</span>}
-          </div>
-
-          {auditVisible && (
-            <div className="audit-log">
-              {(auditLog || []).length === 0 && <div className="muted">События отсутствуют</div>}
-              {(auditLog || []).map((event) => (
-                <div key={event.id || event._id} className="audit-log__item">
-                  <div className="audit-log__message">{formatAuditEvent(event)}</div>
-                  <div className="audit-log__meta">{new Date(event.createdAt).toLocaleString()}</div>
-                </div>
-              ))}
-            </div>
-          )}
+      {showSearch && (
+        <div className="chat-window__search">
+          <input
+            type="text"
+            placeholder="Поиск по сообщениям"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
         </div>
       )}
 
@@ -742,64 +826,22 @@ const ChatWindow = ({
 
                   {!isDeletedForAll && attachments.length > 0 && (
                     <div className="message-attachments">
-                      {attachments.map((att) => {
-                        const attId = (att.id || att._id || '').toString();
-                        const downloadUrl = getAttachmentUrl(attId);
+                      {attachments.map((att, index) => {
+                        const attId = (att.id || att._id || index || '').toString();
                         return (
-                          <div key={attId} className="attachment-card">
-                            {isImage(att.mimeType) ? (
-                              <a href={downloadUrl} target="_blank" rel="noreferrer">
-                                <img
-                                  src={downloadUrl}
-                                  alt={att.originalName || 'Вложение'}
-                                  className="attachment-card__image"
-                                />
-                              </a>
-                            ) : (
-                              <div className="attachment-card__file">
-                                <div className="attachment-card__meta">
-                                  <div className="attachment-card__name">{att.originalName}</div>
-                                  <div className="attachment-card__size">{formatSize(att.size)}</div>
-                                </div>
-                                <a className="link-btn" href={downloadUrl} target="_blank" rel="noreferrer">
-                                  Скачать
-                                </a>
-                              </div>
-                            )}
-                          </div>
+                          <AttachmentCard
+                            key={attId}
+                            attachment={att}
+                            getAttachmentUrl={getAttachmentUrl}
+                            formatSize={formatSize}
+                            isImage={isImage}
+                          />
                         );
                       })}
                     </div>
                   )}
 
-                  {canPinMessages && !isDeletedForAll && (
-                    <div className="message-actions">
-                      {pinnedSet.has(messageIdStr) ? (
-                        <button type="button" className="link-btn" onClick={() => onUnpin && onUnpin(messageIdStr)}>
-                          Открепить
-                        </button>
-                      ) : (
-                        <button type="button" className="link-btn" onClick={() => onPin && onPin(messageIdStr)}>
-                          Закрепить
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {!isDeletedForAll && (
-                    <div className="message-actions">
-                      <button type="button" className="link-btn" onClick={() => handleDeleteForMe(messageIdStr)}>
-                        Удалить у меня
-                      </button>
-                      {canDeleteForAll && (
-                        <button type="button" className="link-btn" onClick={() => handleDeleteForAll(message)}>
-                          Удалить у всех (10 минут)
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {canReact && (
+                  {canReact && !isDeletedForAll && (
                     <div className="message-reactions">
                       <div className="message-reactions__selected">
                         {Object.entries(reactionSummary).map(([emoji, users]) => (
@@ -813,18 +855,107 @@ const ChatWindow = ({
                           </button>
                         ))}
                       </div>
+                    </div>
+                  )}
 
-                      <div className="message-reactions__picker">
-                        {reactionOptions.map((emoji) => (
+                  {!isDeletedForAll && (
+                    <div className="message-actions message-actions--compact">
+                      {canReact && (
+                        <div className="message-actions__menu message-reactions__menu">
                           <button
-                            key={`${messageIdStr}-pick-${emoji}`}
                             type="button"
-                            className="reaction-picker__btn"
-                            onClick={() => onToggleReaction && onToggleReaction(messageIdStr, emoji)}
+                            className={`secondary-btn icon-btn ${
+                              reactionMenuMessageId === messageIdStr ? 'secondary-btn--active' : ''
+                            }`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setReactionMenuMessageId((prev) => (prev === messageIdStr ? null : messageIdStr));
+                              setActionMenuMessageId(null);
+                            }}
+                            title="Реакция"
                           >
-                            {emoji}
+                            🙂
                           </button>
-                        ))}
+
+                          {reactionMenuMessageId === messageIdStr && (
+                            <div className="chat-window__popover message-reactions__menu-list" role="menu">
+                              {reactionOptions.map((emoji) => (
+                                <button
+                                  key={`${messageIdStr}-pick-${emoji}`}
+                                  type="button"
+                                  className="reaction-picker__btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleReactionSelect(message, emoji);
+                                  }}
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="message-actions__menu">
+                        <button
+                          type="button"
+                          className={`secondary-btn icon-btn ${
+                            actionMenuMessageId === messageIdStr ? 'secondary-btn--active' : ''
+                          }`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActionMenuMessageId((prev) => (prev === messageIdStr ? null : messageIdStr));
+                            setReactionMenuMessageId(null);
+                          }}
+                          title="Действия"
+                        >
+                          ⋯
+                        </button>
+
+                        {actionMenuMessageId === messageIdStr && (
+                          <div className="chat-window__popover message-popover" role="menu">
+                            {canPinMessages && (
+                              <button
+                                type="button"
+                                className="link-btn"
+                                onClick={() => {
+                                  if (pinnedSet.has(messageIdStr)) {
+                                    onUnpin && onUnpin(messageIdStr);
+                                  } else {
+                                    onPin && onPin(messageIdStr);
+                                  }
+                                  setActionMenuMessageId(null);
+                                }}
+                              >
+                                {pinnedSet.has(messageIdStr) ? 'Открепить' : 'Закрепить'}
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              className="link-btn"
+                              onClick={() => {
+                                handleDeleteForMe(messageIdStr);
+                                setActionMenuMessageId(null);
+                              }}
+                            >
+                              Удалить у меня
+                            </button>
+                            {canDeleteForAll && (
+                              <button
+                                type="button"
+                                className="link-btn"
+                                onClick={() => {
+                                  handleDeleteForAll(message);
+                                  setActionMenuMessageId(null);
+                                }}
+                              >
+                                Удалить у всех (10 минут)
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -839,27 +970,16 @@ const ChatWindow = ({
 
       {typingHintVisible && <div className="typing-hint">{typingHint}</div>}
 
-      <div className="chat-input-actions">
-        <button
-          type="button"
-          className="secondary-btn"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={!socketConnected || !!bottomNotice || uploadingAttachments}
-        >
-          📎 Прикрепить
-        </button>
+      <input
+        type="file"
+        ref={fileInputRef}
+        multiple
+        accept="image/*,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        onChange={handleAttachmentSelect}
+        style={{ display: 'none' }}
+      />
 
-        <input
-          type="file"
-          ref={fileInputRef}
-          multiple
-          accept="image/*,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          onChange={handleAttachmentSelect}
-          style={{ display: 'none' }}
-        />
-
-        {uploadingAttachments && <span className="muted">Загрузка...</span>}
-      </div>
+      {uploadingAttachments && <span className="muted chat-upload__status">Загрузка вложений...</span>}
 
       {pendingAttachments.length > 0 && (
         <div className="attachments-queue">
@@ -884,7 +1004,16 @@ const ChatWindow = ({
         {bottomNotice ? (
           <div className="chat-input-banner">{bottomNotice}</div>
         ) : (
-          <VkStyleInput value={messageText} onChange={handleInputChange} onSend={handleSend} disabled={!socketConnected} />
+          <>
+            {rateLimitBanner && <div className="chat-input-banner chat-input-banner--warning">{rateLimitBanner}</div>}
+            <VkStyleInput
+              value={messageText}
+              onChange={handleInputChange}
+              onSend={handleSend}
+              disabled={!socketConnected || uploadingAttachments || isRateLimited}
+              onAttach={() => fileInputRef.current?.click()}
+            />
+          </>
         )}
       </div>
 
