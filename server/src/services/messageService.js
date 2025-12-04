@@ -119,6 +119,29 @@ const sendMessage = async ({ chatId, senderId, senderRole, text, mentions = [], 
 
   ensureParticipant(chat, senderId);
 
+  if (chat.rateLimitPerMinute) {
+    const windowMs = 60 * 1000;
+    const since = new Date(Date.now() - windowMs);
+    const recentMessages = await Message.find({
+      chat: chatId,
+      sender: senderId,
+      createdAt: { $gt: since },
+    })
+      .sort({ createdAt: 1 })
+      .limit(chat.rateLimitPerMinute);
+
+    if (recentMessages.length >= chat.rateLimitPerMinute) {
+      const retryAt = new Date(recentMessages[0].createdAt.getTime() + windowMs);
+      const error = new Error('Превышен лимит отправки');
+      error.status = 429;
+      error.code = 'RATE_LIMITED';
+      error.retryAt = retryAt;
+      error.retryAfterMs = Math.max(retryAt.getTime() - Date.now(), 0);
+      error.limit = chat.rateLimitPerMinute;
+      throw error;
+    }
+  }
+
   const isChatAdmin =
     (chat.admins || []).some((id) => id.toString() === senderId.toString()) ||
     (chat.createdBy && chat.createdBy.toString() === senderId.toString());
@@ -300,11 +323,16 @@ const toggleReaction = async ({ messageId, userId, emoji }) => {
   }
 
   const existingIndex = (message.reactions || []).findIndex(
-    (reaction) => reaction.emoji === trimmedEmoji && reaction.userId.toString() === userId.toString()
+    (reaction) => reaction.userId.toString() === userId.toString()
   );
 
   if (existingIndex >= 0) {
-    message.reactions.splice(existingIndex, 1);
+    const existing = message.reactions[existingIndex];
+    if (existing.emoji === trimmedEmoji) {
+      message.reactions.splice(existingIndex, 1);
+    } else {
+      message.reactions.splice(existingIndex, 1, { emoji: trimmedEmoji, userId });
+    }
   } else {
     message.reactions.push({ emoji: trimmedEmoji, userId });
   }

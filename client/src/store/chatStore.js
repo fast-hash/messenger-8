@@ -108,12 +108,16 @@ export const useChatStore = create((set, get) => ({
       }
     });
 
-    socket.on('presence:online', ({ userId }) => {
-      get().updateUserPresence(userId, true);
+    socket.on('presence:online', ({ userId, dndEnabled, dndUntil }) => {
+      get().updateUserPresence(userId, true, dndEnabled, dndUntil);
     });
 
     socket.on('presence:offline', ({ userId }) => {
       get().updateUserPresence(userId, false);
+    });
+
+    socket.on('presence:dnd', ({ userId, dndEnabled, dndUntil }) => {
+      get().updateUserPresence(userId, undefined, dndEnabled, dndUntil);
     });
 
     socket.on('typing:started', ({ chatId, userId }) => {
@@ -335,10 +339,21 @@ export const useChatStore = create((set, get) => ({
       ),
     }));
   },
-  updateUserPresence(userId, isOnline) {
+  updateUserPresence(userId, isOnline, dndEnabled, dndUntil) {
     set((state) => ({
       chats: state.chats.map((chat) =>
-        chat.otherUser && chat.otherUser.id === userId ? { ...chat, isOnline } : chat
+        chat.otherUser && chat.otherUser.id === userId
+          ? {
+              ...chat,
+              isOnline: typeof isOnline === 'boolean' ? isOnline : chat.isOnline,
+              otherUser: {
+                ...chat.otherUser,
+                dndEnabled:
+                  typeof dndEnabled === 'boolean' ? dndEnabled : chat.otherUser?.dndEnabled || false,
+                dndUntil: typeof dndUntil !== 'undefined' ? dndUntil : chat.otherUser?.dndUntil || null,
+              },
+            }
+          : chat
       ),
     }));
   },

@@ -50,6 +50,8 @@ const setupSockets = (httpServer) => {
         role: payload.role,
         department: payload.department,
         jobTitle: payload.jobTitle,
+        dndEnabled: payload.dndEnabled || false,
+        dndUntil: payload.dndUntil || null,
       };
       return next();
     } catch (error) {
@@ -59,22 +61,30 @@ const setupSockets = (httpServer) => {
 
   io.on('connection', (socket) => {
     const incrementPresence = async () => {
-      const current = onlineUsers.get(socket.user.id) || 0;
-      onlineUsers.set(socket.user.id, current + 1);
+      const current = onlineUsers.get(socket.user.id) || { count: 0 };
+      const nextCount = (current.count || 0) + 1;
+      const nextMeta = {
+        count: nextCount,
+        dndEnabled: socket.user.dndEnabled || false,
+        dndUntil: socket.user.dndUntil || null,
+      };
+      onlineUsers.set(socket.user.id, nextMeta);
 
-      if (current === 0) {
+      if ((current.count || 0) === 0) {
         const chats = await Chat.find({ participants: socket.user.id }).select('_id');
         chats.forEach((chat) => {
           io.to(`chat:${chat._id.toString()}`).emit('presence:online', {
             userId: socket.user.id,
+            dndEnabled: socket.user.dndEnabled || false,
+            dndUntil: socket.user.dndUntil || null,
           });
         });
       }
     };
 
     const decrementPresence = async () => {
-      const current = onlineUsers.get(socket.user.id) || 0;
-      const nextCount = Math.max(0, current - 1);
+      const current = onlineUsers.get(socket.user.id) || { count: 0 };
+      const nextCount = Math.max(0, (current.count || 0) - 1);
       if (nextCount === 0) {
         onlineUsers.delete(socket.user.id);
         const chats = await Chat.find({ participants: socket.user.id }).select('_id');
@@ -84,7 +94,7 @@ const setupSockets = (httpServer) => {
           });
         });
       } else {
-        onlineUsers.set(socket.user.id, nextCount);
+        onlineUsers.set(socket.user.id, { ...current, count: nextCount });
       }
     };
 
@@ -113,8 +123,13 @@ const setupSockets = (httpServer) => {
         chat.participants
           .filter((id) => id.toString() !== socket.user.id.toString())
           .forEach((participantId) => {
-            if ((onlineUsers.get(participantId.toString()) || 0) > 0) {
-              socket.emit('presence:online', { userId: participantId.toString() });
+            const presence = onlineUsers.get(participantId.toString());
+            if (presence && (presence.count || 0) > 0) {
+              socket.emit('presence:online', {
+                userId: participantId.toString(),
+                dndEnabled: presence.dndEnabled || false,
+                dndUntil: presence.dndUntil || null,
+              });
             }
           });
       } catch (error) {
@@ -191,5 +206,12 @@ const setupSockets = (httpServer) => {
 
 const getIo = () => ioInstance;
 
+const updatePresenceMeta = (userId, meta = {}) => {
+  const existing = onlineUsers.get(userId.toString());
+  if (!existing) return;
+  onlineUsers.set(userId.toString(), { ...existing, ...meta });
+};
+
 module.exports = setupSockets;
 module.exports.getIo = getIo;
+module.exports.updatePresenceMeta = updatePresenceMeta;

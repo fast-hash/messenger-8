@@ -8,13 +8,15 @@ const formatTime = (dateString) => {
 };
 
 const ChatList = ({ chats, selectedChatId, onSelect }) => {
-  if (!chats.length) {
+  const safeChats = Array.isArray(chats) ? chats : [];
+
+  if (!safeChats.length) {
     return <p className="empty-state">Чатов пока нет. Создайте первый.</p>;
   }
 
   return (
     <ul className="chat-list">
-      {chats.map((chat) => {
+      {safeChats.map((chat) => {
         const isActive = chat.id === selectedChatId;
         const lastMessage = chat.lastMessage?.text || 'Нет сообщений';
         const lastTime = chat.lastMessage?.createdAt ? formatTime(chat.lastMessage.createdAt) : '';
@@ -22,6 +24,14 @@ const ChatList = ({ chats, selectedChatId, onSelect }) => {
           chat.type === 'group'
             ? chat.title || 'Групповой чат'
             : chat.otherUser?.displayName || chat.otherUser?.username;
+        const statusClass =
+          chat.type === 'group'
+            ? 'status status--group'
+            : chat.isOnline
+            ? chat.otherUser?.dndEnabled
+              ? 'status status--dnd'
+              : 'status status--online'
+            : 'status status--offline';
         return (
           <li key={chat.id}>
             <button
@@ -30,11 +40,7 @@ const ChatList = ({ chats, selectedChatId, onSelect }) => {
               onClick={() => onSelect(chat.id)}
             >
               <div className="chat-list__avatar">
-                {chat.type === 'group' ? (
-                  <span className="status status--group" title="Группа" />
-                ) : (
-                  <span className={chat.isOnline ? 'status status--online' : 'status status--offline'} />
-                )}
+                <span className={statusClass} title={chat.type === 'group' ? 'Группа' : undefined} />
               </div>
               <div className="chat-list__body">
                 <div className="chat-list__top">
